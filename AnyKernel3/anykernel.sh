@@ -44,8 +44,6 @@ replace_file fstab.ums512_25c10 0644 fstab.ums512_25c10;
 write_boot; # use flash_boot to skip ramdisk repack, e.g. for devices with init_boot ramdisk
 ## end boot install
 
-flash_generic vbmeta;
-
 ## init_boot files attributes
 #init_boot_attributes() {
 #set_perm_recursive 0 0 755 644 $RAMDISK/*;

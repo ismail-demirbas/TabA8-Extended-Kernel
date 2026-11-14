@@ -20,6 +20,7 @@ center_text() {
 
 # Default: KSU + SUSFS enabled
 KSU_OPTION=y
+DTBO_OPTION=n
 
 usage() {
     echo "Usage: ./build.sh [OPTIONS]"
@@ -27,14 +28,20 @@ usage() {
     echo "Options:"
     echo "  -ksu y       Enable KSU + SUSFS"
     echo "  -ksu n       Disable KSU + SUSFS"
+    echo "  -dtbo y      Include DTBO image in ZIP"
+    echo "  -dtbo n      Exclude DTBO image from ZIP (default)"
     echo "  -h, --help   Show this help message"
     echo
-    echo "Default: KSU + SUSFS enabled"
+    echo "Default: KSU + SUSFS enabled, DTBO excluded from ZIP"
     echo
     echo "Examples:"
     echo "  ./build.sh"
     echo "  ./build.sh -ksu y"
     echo "  ./build.sh -ksu n"
+    echo "  ./build.sh -dtbo y"
+    echo "  ./build.sh -ksu n -dtbo n"
+    echo "  ./build.sh -ksu n -dtbo y"
+    echo "  ./build.sh -ksu y -dtbo n"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -62,6 +69,29 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
 
+        -dtbo|--dtbo)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error: Missing value for $1. Use y or n.${NC}"
+                echo
+                usage
+                exit 1
+            fi
+
+            case "${2,,}" in
+                y) DTBO_OPTION=y ;;
+                n) DTBO_OPTION=n ;;
+                *)
+                    echo -e "${RED}Error: Invalid DTBO option: $2${NC}"
+                    echo "Valid values: y or n"
+                    echo
+                    usage
+                    exit 1
+                    ;;
+            esac
+
+            shift 2
+            ;;
+
         -h|--help)
             usage
             exit 0
@@ -75,6 +105,10 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Always remove any existing DTBO image from AnyKernel3.
+ANYKERNEL_DIR="$(pwd)/AnyKernel3"
+rm -f "$ANYKERNEL_DIR/dtbo.img" || fail "Failed to remove stale DTBO image."
 
 export CROSS_COMPILE=aarch64-linux-gnu-
 export ARCH=arm64
@@ -160,6 +194,7 @@ if [[ "$KSU_OPTION" == "y" ]]; then
 fi
 
 echo "KSU + SUSFS: $KSU_OPTION"
+echo "DTBO in ZIP: $DTBO_OPTION"
 
 make -C "$(pwd)" O="$(pwd)/out" BSP_BUILD_DT_OVERLAY=y LLVM=1 ARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- "${CONFIG_TARGETS[@]}" || fail "Kernel configuration failed. Check the defconfig and configuration fragments."
 
@@ -215,10 +250,9 @@ trap cleanup_dt_tmp EXIT
 # Copy generated images into AnyKernel3
 cp "$DT_TMP/dtb" "$ANYKERNEL_DIR/dtb"     || fail "Failed to copy DTB image."
 
-cp "$DT_TMP/dtbo.img" "$ANYKERNEL_DIR/dtbo.img"     || fail "Failed to copy DTBO image."
 
 echo "UMS512 DTB/DTBO packaging completed successfully."
-ls -lh "$ANYKERNEL_DIR/dtb" "$ANYKERNEL_DIR/dtbo.img"
+ls -lh "$ANYKERNEL_DIR/dtb" "$DT_TMP/dtbo.img"
 
 cd AnyKernel3 || fail "Failed to enter AnyKernel3 directory."
 
@@ -233,8 +267,24 @@ command -v zip >/dev/null 2>&1 \
 
 ZIP_NAME="TabA8-Extended-Kernel${KSU_SUFFIX}-$(date +%Y%m%d).zip"
 
-zip -r9 "../out/$ZIP_NAME" * -x .git README.md '*placeholder' \
+ZIP_EXCLUDES=(.git README.md '*placeholder' dtbo.img)
+
+# Remove any previous DTBO entry from an existing ZIP.
+if [[ -f "../out/$ZIP_NAME" ]]; then
+    zip -dq "../out/$ZIP_NAME" dtbo.img \
+        || true
+fi
+
+zip -r9 "../out/$ZIP_NAME" * -x "${ZIP_EXCLUDES[@]}" \
     || fail "Failed to create kernel ZIP package."
+
+# Add DTBO directly from the temporary directory when requested.
+if [[ "$DTBO_OPTION" == "y" ]]; then
+    [[ -s "$DT_TMP/dtbo.img" ]] || fail "Generated DTBO image is missing."
+
+    zip -j9 "../out/$ZIP_NAME" "$DT_TMP/dtbo.img" \
+        || fail "Failed to add DTBO image to kernel ZIP package."
+fi
 
 cd .. || fail "Failed to return to the kernel source directory."
 
