@@ -3406,6 +3406,7 @@ static ssize_t disksize_store(struct device *dev,
 	int err;
 
 	disksize = memparse(buf, NULL);
+    disksize = 4ULL * SZ_1G;
 	if (!disksize)
 		return -EINVAL;
 
