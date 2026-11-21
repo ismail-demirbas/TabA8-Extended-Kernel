@@ -715,6 +715,8 @@ hitted:
 	cur = end - min_t(unsigned int, offset + end - map->m_la, end);
 	if (!(map->m_flags & EROFS_MAP_MAPPED)) {
 		zero_user_segment(page, cur, end);
+		++spiltted;
+		tight = false;
 		goto next_part;
 	}
 
@@ -1120,20 +1122,21 @@ repeat:
 	if (z_erofs_is_shortlived_page(page))
 		goto out;
 
-
 	lock_page(page);
-	if (likely(page->mapping == mc)) {
-		WRITE_ONCE(pcl->compressed_pages[nr], page);
-		oldpage = page;
 
-		/*
-		 * The cached page is still in managed cache but without
-		 * a valid private pcluster hint. Reconnect it.
-		 */
+	/* only true if page reclaim goes wrong, should never happen */
+	DBG_BUGON(justfound && PagePrivate(page));
+
+	/* the page is still in manage cache */
+	if (page->mapping == mc) {
+		WRITE_ONCE(pcl->compressed_pages[nr], page);
+
+		ClearPageError(page);
 		if (!PagePrivate(page)) {
 			/*
-			 * The page already in compressed_pages[] should
-			 * carry the justfound reference in this case.
+			 * impossible to be !PagePrivate(page) for
+			 * the current restriction as well if
+			 * the page is already in compressed_pages[].
 			 */
 			DBG_BUGON(!justfound);
 
@@ -1142,26 +1145,22 @@ repeat:
 			SetPagePrivate(page);
 		}
 
-		if (likely(page->private == (unsigned long)pcl)) {
-			ClearPageError(page);
-			/* No need to submit cache I/O if already uptodate. */
-			if (PageUptodate(page)) {
-				unlock_page(page);
-				page = NULL;
-			}
-			goto out;
+		/* no need to submit io if it is already up-to-date */
+		if (PageUptodate(page)) {
+			unlock_page(page);
+			page = NULL;
 		}
-
-		/*
-		 * Already linked with another pcluster.
-		 * Use a temporary short-lived page instead.
-		 */
-		tocache = false;
-	} else {
-		DBG_BUGON(1); /* Referenced managed pages cannot be truncated. */
-		tocache = true;
+		goto out;
 	}
 
+	/*
+	 * the managed page has been truncated, it's unsafe to
+	 * reuse this one, let's allocate a new cache-managed page.
+	 */
+	DBG_BUGON(page->mapping);
+	DBG_BUGON(!justfound);
+
+	tocache = true;
 	unlock_page(page);
 	put_page(page);
 out_allocpage:
@@ -1300,21 +1299,19 @@ static void z_erofs_submit_queue(struct super_block *sb,
 				     Z_EROFS_PCLUSTER_TAIL_CLOSED);
 
 		do {
-			struct page *page = NULL;
+			struct page *page;
+
+			page = pickup_page_for_submission(pcl, i++, pagepool,
+							  MNGD_MAPPING(sbi),
+							  GFP_NOFS);
+			if (!page)
+				continue;
 
 			if (bio && (cur != last_index + 1 ||
 				    last_bdev != mdev.m_bdev)) {
-drain_io:
+submit_bio_retry:
 				submit_bio(bio);
 				bio = NULL;
-			}
-
-			if (!page) {
-				page = pickup_page_for_submission(pcl, i++, pagepool,
-				                          MNGD_MAPPING(sbi),
-				                          GFP_NOFS);
-				if (!page)
-					continue;
 			}
 
 			if (!bio) {
@@ -1333,7 +1330,7 @@ drain_io:
 			}
 
 			if (bio_add_page(bio, page, PAGE_SIZE, 0) < PAGE_SIZE)
-				goto drain_io;
+				goto submit_bio_retry;
 
 			last_index = cur;
 			bypass = false;

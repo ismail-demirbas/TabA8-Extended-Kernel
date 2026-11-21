@@ -38,6 +38,7 @@ static inline void *detach_page_private(struct page *page)
 {
 	void *data = (void *)page_private(page);
 
+	if (!PagePrivate(page))
 		return NULL;
 	ClearPagePrivate(page);
 	set_page_private(page, 0);
