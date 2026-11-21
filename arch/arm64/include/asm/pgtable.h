@@ -697,6 +697,14 @@ extern pgd_t tramp_pg_dir[PTRS_PER_PGD];
 
 extern int kern_addr_valid(unsigned long addr);
 
+#include <asm/cpufeature.h>
+
+static inline bool arch_has_hw_pte_young(void)
+{
+	return cpu_has_hw_af();
+}
+#define arch_has_hw_pte_young arch_has_hw_pte_young
+
 #include <asm-generic/pgtable.h>
 
 void pgd_cache_init(void);
