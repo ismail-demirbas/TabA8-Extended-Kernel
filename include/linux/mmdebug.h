@@ -58,6 +58,21 @@ void dump_mm(const struct mm_struct *mm);
 #define VIRTUAL_BUG_ON(cond) do { } while (0)
 #endif
 
+#ifdef CONFIG_DEBUG_VM
+#define VM_WARN_ON_ONCE_PAGE(cond, page) ({				\
+	static bool __warned;						\
+	int __r = !!(cond);						\
+	if (unlikely(__r && !__warned)) {				\
+		dump_page(page, "VM_WARN_ON_ONCE_PAGE(" __stringify(cond) ")");	\
+		__warned = true;					\
+		WARN_ON(1);						\
+	}								\
+	unlikely(__r);							\
+})
+#else
+#define VM_WARN_ON_ONCE_PAGE(cond, page) BUILD_BUG_ON_INVALID(cond)
+#endif
+
 #ifdef CONFIG_DEBUG_VM_PGFLAGS
 #define VM_BUG_ON_PGFLAGS(cond, page) VM_BUG_ON_PAGE(cond, page)
 #else

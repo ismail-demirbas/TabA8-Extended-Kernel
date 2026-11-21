@@ -1097,4 +1097,11 @@ static inline bool arch_has_pfn_modify_check(void)
 #define mm_pmd_folded(mm)	__is_defined(__PAGETABLE_PMD_FOLDED)
 #endif
 
+#ifndef arch_has_hw_pte_young
+static inline bool arch_has_hw_pte_young(void)
+{
+	return false;
+}
+#endif
+
 #endif /* _ASM_GENERIC_PGTABLE_H */

@@ -102,6 +102,8 @@ void lruvec_init(struct lruvec *lruvec)
 	for_each_lru(lru)
 		INIT_LIST_HEAD(&lruvec->lists[lru]);
 
+	lru_gen_init_lruvec(lruvec);
+
 #ifdef CONFIG_PROTECT_LRU
 	protect_lruvec_init(memcg, lruvec);
 #endif
