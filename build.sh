@@ -18,30 +18,52 @@ center_text() {
     printf "%*s%b%s%b\n" "$padding" "" "$color" "$text" "$NC"
 }
 
-# Default: KSU + SUSFS enabled
+# Default: KSU + SUSFS, DTB, DTBO, and VBMeta enabled.
 KSU_OPTION=y
-DTBO_OPTION=n
+DTB_OPTION=y
+DTBO_OPTION=y
+VBMETA_OPTION=y
 
 usage() {
     echo "Usage: ./build.sh [OPTIONS]"
     echo
-    echo "Options:"
-    echo "  -ksu y       Enable KSU + SUSFS"
-    echo "  -ksu n       Disable KSU + SUSFS"
-    echo "  -dtbo y      Include DTBO image in ZIP"
-    echo "  -dtbo n      Exclude DTBO image from ZIP (default)"
-    echo "  -h, --help   Show this help message"
+    echo "Options can be combined in any order. Omitted options use their defaults."
     echo
-    echo "Default: KSU + SUSFS enabled, DTBO excluded from ZIP"
+    echo "Kernel features:"
+    echo "  -ksu y|n       Enable or disable KSU + SUSFS (default: y)"
+    echo
+    echo "Device-tree packaging:"
+    echo "  -dtb y|n       y: build DTB and place it in AnyKernel3/dtb"
+    echo "                 n: omit DTB from the ZIP (default: y)"
+    echo "  -dtbo y|n      y: assemble five UMS512 overlays in stock order and IDs,"
+    echo "                    and place the unsigned result in AnyKernel3/dtbo.img (default: y)"
+    echo "                 n: omit DTBO from AnyKernel3"
+    echo
+    echo "VBMeta:"
+    echo "  -vbmeta y|n    y: generate an empty vbmeta.img with flags 1 and package it"
+    echo "                 n: omit VBMeta (default: y)"
+    echo
+    echo "Output notes:"
+    echo "  - Does not create out/boot.img, out/dtbo.img, or an Odin TAR."
+    echo "  - VBMeta generation uses build/avbtool.py and build/testkey_rsa4096.pem."
+    echo "  - AnyKernel3 ZIP is created after selected files are copied."
     echo
     echo "Examples:"
     echo "  ./build.sh"
-    echo "  ./build.sh -ksu y"
-    echo "  ./build.sh -ksu n"
-    echo "  ./build.sh -dtbo y"
     echo "  ./build.sh -ksu n -dtbo n"
     echo "  ./build.sh -ksu n -dtbo y"
     echo "  ./build.sh -ksu y -dtbo n"
+    echo "  ./build.sh -ksu n -dtb y -dtbo n"
+    echo "  ./build.sh -ksu n -dtb n -dtbo y"
+    echo "  ./build.sh -ksu n -dtb n -dtbo n"
+    echo "  ./build.sh -ksu y -dtb y -dtbo n"
+    echo "  ./build.sh -ksu y -dtb n -dtbo n"
+    echo "  ./build.sh -ksu y -dtb y -dtbo y"
+    echo "  ./build.sh -ksu y -dtb n -dtbo y"
+    echo "  ./build.sh -dtbo y -vbmeta n"
+    echo "  ./build.sh -dtbo n -vbmeta y"
+    echo "  ./build.sh -dtb n"
+    echo "  ./build.sh --help"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -92,6 +114,18 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
 
+        -dtb|--dtb)
+            if [[ $# -lt 2 ]]; then echo -e "${RED}Error: Missing value for $1. Use y or n.${NC}"; usage; exit 1; fi
+            case "${2,,}" in y) DTB_OPTION=y ;; n) DTB_OPTION=n ;; *) fail "Invalid DTB option: $2 (use y or n)" ;; esac
+            shift 2
+            ;;
+
+        -vbmeta|--vbmeta)
+            if [[ $# -lt 2 ]]; then echo -e "${RED}Error: Missing value for $1. Use y or n.${NC}"; usage; exit 1; fi
+            case "${2,,}" in y) VBMETA_OPTION=y ;; n) VBMETA_OPTION=n ;; *) fail "Invalid VBMeta option: $2 (use y or n)" ;; esac
+            shift 2
+            ;;
+
         -h|--help)
             usage
             exit 0
@@ -106,9 +140,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Always remove any existing DTBO image from AnyKernel3.
 ANYKERNEL_DIR="$(pwd)/AnyKernel3"
-rm -f "$ANYKERNEL_DIR/dtbo.img" || fail "Failed to remove stale DTBO image."
+OUT_DIR="$(pwd)/out"
+AVBTOOL="$(pwd)/build/avbtool.py"
+AVB_KEY="$(pwd)/build/testkey_rsa4096.pem"
+mkdir -p "$OUT_DIR"
+rm -f "$ANYKERNEL_DIR/dtb" "$ANYKERNEL_DIR/dtbo.img" "$ANYKERNEL_DIR/vbmeta.img" \
+    "$OUT_DIR/dtb.img" "$OUT_DIR/dtbo.img" "$OUT_DIR/vbmeta.img" "$OUT_DIR/boot.img"
 
 export CROSS_COMPILE=aarch64-linux-gnu-
 export ARCH=arm64
@@ -194,7 +232,9 @@ if [[ "$KSU_OPTION" == "y" ]]; then
 fi
 
 echo "KSU + SUSFS: $KSU_OPTION"
+echo "DTB: $DTB_OPTION"
 echo "DTBO in ZIP: $DTBO_OPTION"
+echo "VBMeta: $VBMETA_OPTION"
 
 make -C "$(pwd)" O="$(pwd)/out" BSP_BUILD_DT_OVERLAY=y LLVM=1 ARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- "${CONFIG_TARGETS[@]}" || fail "Kernel configuration failed. Check the defconfig and configuration fragments."
 
@@ -209,11 +249,9 @@ cp out/arch/arm64/boot/Image $(pwd)/arch/arm64/boot/Image
 cp out/arch/arm64/boot/Image AnyKernel3/kernel \
     || fail "Failed to copy the compiled kernel Image to AnyKernel3/"
 
-# Package UMS512 DTB and DTBO images
+# Package UMS512 DTB and DTBO images.
 DTS_DIR="$(pwd)/out/arch/arm64/boot/dts/sprd"
 MKDTIMG="$(pwd)/tools/mkdtimg/mkdtimg"
-ANYKERNEL_DIR="$(pwd)/AnyKernel3"
-
 DTB_FILES=(
     "$DTS_DIR/ums512.dtb"
     "$DTS_DIR/ums512-1h10-overlay.dtbo"
@@ -222,37 +260,43 @@ DTB_FILES=(
     "$DTS_DIR/ums512-2h10-overlay.dtbo"
     "$DTS_DIR/ums512-wifionly-overlay.dtbo"
 )
-
-[[ -x "$MKDTIMG" ]] || fail "mkdtimg not found or not executable."
-
-for dt_file in "${DTB_FILES[@]}"; do
-    [[ -s "$dt_file" ]] || fail "Missing DTB/DTBO file: $dt_file"
-done
-
-DT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/ums512-dt.XXXXXX")"     || fail "Failed to create temporary directory."
-
-cleanup_dt_tmp() {
-    rm -rf "$DT_TMP"
-}
+DT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/ums512-dt.XXXXXX")" || fail "Failed to create temporary directory."
+cleanup_dt_tmp() { rm -rf "$DT_TMP"; }
 trap cleanup_dt_tmp EXIT
 
-# Create the single-entry UMS512 DTB table
-"$MKDTIMG" create "$DT_TMP/dtb"     --page_size=2048 --version=0     "$DTS_DIR/ums512.dtb" --id=0x00000000 --rev=0x00000000     || fail "Failed to create DTB image."
-
-# Create the five-entry DTBO table in stock order
-"$MKDTIMG" create "$DT_TMP/dtbo.img"     --page_size=2048 --version=0     "$DTS_DIR/ums512-1h10-overlay.dtbo" --id=0x1100 --rev=0     "$DTS_DIR/ums512-1h10_go-overlay.dtbo" --id=0x1900 --rev=0     "$DTS_DIR/ums512-25c10-overlay.dtbo" --id=0x1100 --rev=0     "$DTS_DIR/ums512-2h10-overlay.dtbo" --id=0x2100 --rev=0     "$DTS_DIR/ums512-wifionly-overlay.dtbo" --id=0x1100 --rev=0     || fail "Failed to create DTBO image."
-
-# Validate generated device tree images
-"$MKDTIMG" dump "$DT_TMP/dtb" > /dev/null     || fail "Generated DTB image is invalid."
-
-"$MKDTIMG" dump "$DT_TMP/dtbo.img" > /dev/null     || fail "Generated DTBO image is invalid."
-
-# Copy generated images into AnyKernel3
-cp "$DT_TMP/dtb" "$ANYKERNEL_DIR/dtb"     || fail "Failed to copy DTB image."
-
-
+if [[ "$DTB_OPTION" == "y" || "$DTBO_OPTION" == "y" ]]; then
+    [[ -x "$MKDTIMG" ]] || fail "mkdtimg not found or not executable."
+    if [[ "$DTB_OPTION" == "y" ]]; then [[ -s "$DTS_DIR/ums512.dtb" ]] || fail "Missing DTB file: $DTS_DIR/ums512.dtb"; fi
+    if [[ "$DTBO_OPTION" == "y" ]]; then
+        for dt_file in "${DTB_FILES[@]:1}"; do [[ -s "$dt_file" ]] || fail "Missing DTBO file: $dt_file"; done
+    fi
+fi
+if [[ "$DTB_OPTION" == "y" ]]; then
+    "$MKDTIMG" create "$DT_TMP/dtb" --page_size=2048 --version=0 "$DTS_DIR/ums512.dtb" --id=0x00000000 --rev=0x00000000 || fail "Failed to create DTB image."
+    "$MKDTIMG" dump "$DT_TMP/dtb" >/dev/null || fail "Generated DTB image is invalid."
+    cp "$DT_TMP/dtb" "$ANYKERNEL_DIR/dtb" || fail "Failed to copy DTB image."
+fi
+if [[ "$DTBO_OPTION" == "y" ]]; then
+    # Preserve the five stock UMS512 overlays, their order, and IDs.
+    "$MKDTIMG" create "$DT_TMP/dtbo.img" --page_size=2048 --version=0 \
+        "$DTS_DIR/ums512-1h10-overlay.dtbo" --id=0x1100 --rev=0 \
+        "$DTS_DIR/ums512-1h10_go-overlay.dtbo" --id=0x1900 --rev=0 \
+        "$DTS_DIR/ums512-25c10-overlay.dtbo" --id=0x1100 --rev=0 \
+        "$DTS_DIR/ums512-2h10-overlay.dtbo" --id=0x2100 --rev=0 \
+        "$DTS_DIR/ums512-wifionly-overlay.dtbo" --id=0x1100 --rev=0 || fail "Failed to create DTBO image."
+    "$MKDTIMG" dump "$DT_TMP/dtbo.img" >/dev/null || fail "Generated DTBO image is invalid."
+    cp "$DT_TMP/dtbo.img" "$ANYKERNEL_DIR/dtbo.img" || fail "Failed to copy AnyKernel3/dtbo.img."
+fi
+if [[ "$VBMETA_OPTION" == "y" ]]; then
+    [[ -f "$AVBTOOL" ]] || fail "Missing build/avbtool.py."
+    [[ -s "$AVB_KEY" ]] || fail "Missing AVB signing key: $AVB_KEY."
+    python3 "$AVBTOOL" make_vbmeta_image --output "$OUT_DIR/vbmeta.img" \
+        --key "$AVB_KEY" --algorithm SHA256_RSA4096 --flags 1 \
+        || fail "Failed to generate flags-1 out/vbmeta.img."
+    cp "$OUT_DIR/vbmeta.img" "$ANYKERNEL_DIR/vbmeta.img" \
+        || fail "Failed to copy generated vbmeta.img into AnyKernel3/."
+fi
 echo "UMS512 DTB/DTBO packaging completed successfully."
-ls -lh "$ANYKERNEL_DIR/dtb" "$DT_TMP/dtbo.img"
 
 cd AnyKernel3 || fail "Failed to enter AnyKernel3 directory."
 
@@ -267,24 +311,12 @@ command -v zip >/dev/null 2>&1 \
 
 ZIP_NAME="TabA8-Extended-Kernel${KSU_SUFFIX}-$(date +%Y%m%d).zip"
 
-ZIP_EXCLUDES=(.git README.md '*placeholder' dtbo.img)
-
-# Remove any previous DTBO entry from an existing ZIP.
-if [[ -f "../out/$ZIP_NAME" ]]; then
-    zip -dq "../out/$ZIP_NAME" dtbo.img \
-        || true
-fi
+ZIP_EXCLUDES=(.git README.md '*placeholder')
+[[ "$DTBO_OPTION" == "n" ]] && ZIP_EXCLUDES+=(dtbo.img)
+rm -f "../out/$ZIP_NAME"
 
 zip -r9 "../out/$ZIP_NAME" * -x "${ZIP_EXCLUDES[@]}" \
     || fail "Failed to create kernel ZIP package."
-
-# Add DTBO directly from the temporary directory when requested.
-if [[ "$DTBO_OPTION" == "y" ]]; then
-    [[ -s "$DT_TMP/dtbo.img" ]] || fail "Generated DTBO image is missing."
-
-    zip -j9 "../out/$ZIP_NAME" "$DT_TMP/dtbo.img" \
-        || fail "Failed to add DTBO image to kernel ZIP package."
-fi
 
 cd .. || fail "Failed to return to the kernel source directory."
 
