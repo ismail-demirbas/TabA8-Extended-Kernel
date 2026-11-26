@@ -942,10 +942,6 @@ struct task_struct {
 
 	struct nameidata		*nameidata;
 
-#ifdef CONFIG_SYSVIPC
-	struct sysv_sem			sysvsem;
-	struct sysv_shm			sysvshm;
-#endif
 #ifdef CONFIG_DETECT_HUNG_TASK
 	unsigned long			last_switch_count;
 #endif
@@ -1307,6 +1303,10 @@ struct task_struct {
 	randomized_struct_fields_end
 
 	/* CPU-specific state of this task: */
+#ifdef CONFIG_SYSVIPC
+	struct sysv_sem			sysvsem;
+	struct sysv_shm			sysvshm;
+#endif
 	struct thread_struct		thread;
 
 	/*
